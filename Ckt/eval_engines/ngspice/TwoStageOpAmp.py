@@ -10,6 +10,9 @@ import sys
 from copy import deepcopy
 import hdl21 as h
 import hdl21.sim as hs
+import vlsirtools.spice as vsp
+from hdl21.external_module import SpiceType
+from hdl21.prefix import µ, NANO
 
 
 """ 
@@ -22,18 +25,27 @@ Real versions will have some more parameters; these just have multiplier "m".
 class MosParams:
     m = h.Param(dtype=int, desc="Transistor Multiplier")
 
+@h.paramclass
+class PdkMosParams:
+    w = h.Param(dtype=h.Scalar, desc="Width in resolution units", default=0.5 * µ)
+    l = h.Param(dtype=h.Scalar, desc="Length in resolution units", default=90 * NANO)
+    nf = h.Param(dtype=h.Scalar, desc="Number of parallel fingers", default=1)
+    m = h.Param(dtype=h.Scalar, desc="Transistor Multiplier", default=1)
+
 
 nmos = h.ExternalModule(
     name="nmos",
     desc="Nmos Transistor (Multiplier Param Only!)",
     port_list=deepcopy(h.Mos.port_list),
-    paramtype=MosParams,
+    paramtype=PdkMosParams,
+    spicetype=SpiceType.MOS,
 )
 pmos = h.ExternalModule(
     name="pmos",
     desc="Pmos Transistor (Multiplier Param Only!)",
     port_list=deepcopy(h.Mos.port_list),
-    paramtype=MosParams,
+    paramtype=PdkMosParams,
+    spicetype=SpiceType.MOS,
 )
 
 @h.paramclass
@@ -47,10 +59,10 @@ class OpAmpParams:
     wn3 = h.Param(dtype=int, desc="Width of NMOS mn3", default=9)
     wn4 = h.Param(dtype=int, desc="Width of NMOS mn4", default=20)
     wn5 = h.Param(dtype=int, desc="Width of NMOS mn5", default=60)
-    VDD = h.Param(dtype=float, desc="VDD voltage", default=1)
-    CL = h.Param(dtype=float, desc="CL capacitance", default=1)
-    Cc = h.Param(dtype=float, desc="Cc capacitance", default=1)
-    ibias = h.Param(dtype=float, desc="ibias current", default=1)
+    VDD = h.Param(dtype=float, desc="VDD voltage", default=1.2)
+    CL = h.Param(dtype=float, desc="CL capacitance", default=1e-11)
+    Cc = h.Param(dtype=float, desc="Cc capacitance", default=3e-12)
+    ibias = h.Param(dtype=float, desc="ibias current", default=3e-5)
 
 
 @h.generator
@@ -61,40 +73,31 @@ def OpAmp(p: OpAmpParams) -> h.Module:
     class DiffOta:
         # IO Interface
         VDD, VSS = 2 * h.Input()
+        
         inp = h.Diff(desc="Differential Input", port=True, role=h.Diff.Roles.SINK)
-        out = h.Diff(desc="Differential Output", port=True, role=h.Diff.Roles.SOURCE)
+        out = h.Output()
 
         # Internal Signals
-        net1, net2, net3, net4, net5, net6, net7 = h.Signals(7)
-        # cm = h.Signal()
+        net3, net4, net5, net7 = h.Signals(4)
 
-        # Input Stage & CMFB Bias
-        mp1 = pmos(m=p.wp1)(d=net4, g=net4, s=VDD, b=VDD)
-        mp2 = pmos(m=p.wp2)(d=net5, g=net4, s=VDD, b=VDD)
-        mn1 = pmos(m=p.wn1)(d=net4, g=net1, s=net3, b=net3)
-        mn2 = pmos(m=p.wn2)(d=net5, g=net1, s=net3, b=net3)
-        mn3 = pmos(m=p.wn3)(d=net3, g=net7, s=VSS, b=VSS)
+        # Input Stage
+        mp1 = pmos(m=p.wp1)(d=net4, g=net4, s=VDD, b=VDD) # Current mirror within the input stage
+        mp2 = pmos(m=p.wp2)(d=net5, g=net4, s=VDD, b=VDD) # Current mirror within the input stage
+        mn1 = nmos(m=p.wn1)(d=net4, g=inp.n, s=net3, b=net3) # Input MOS pair
+        mn2 = nmos(m=p.wn2)(d=net5, g=inp.p, s=net3, b=net3) # Input MOS pair
+        mn3 = nmos(m=p.wn3)(d=net3, g=net7, s=VSS, b=VSS) # Mirrored current source
 
         # Output Stage
-        mp3 = pmos(m=p.wp3)(d=net6, g=net5, s=VDD, b=VDD)
-        mn5 = nmos(m=p.wn5)(d = net6, g = net7, s = VSS, b = VSS)
-        CL = h.Cap(c=p.CL)(p = net6, n = VSS)
+        mp3 = pmos(m=p.wp3)(d=out, g=net5, s=VDD, b=VDD) # Output inverter
+        mn5 = nmos(m=p.wn5)(d = out, g = net7, s = VSS, b = VSS) # Output inverter
+        CL = h.Cap(c=p.CL)(p = out, n = VSS) # Load capacitance
 
         # Biasing
-        mn4 = nmos(m=p.wn4)(d = net7, g = net7, s = VSS, b = VSS)
-        ibias = h.Isrc(dc = p.ibias)(p = net7, n = VDD)
-
-        net1=inp.p
-        net2=inp.n
-        out.p=net6
-        out.n=VSS
-
-        # xndiode = nmos(m=1)(d=ibias, g=ibias, s=VSS, b=VSS)
-        # xnsrc = nmos(m=1)(d=pbias, g=ibias, s=VSS, b=VSS)
-        # xpdiode = pmos(m=6)(d=pbias, g=pbias, s=VDD, b=VDD)
+        mn4 = nmos(m=p.wn4)(d = net7, g = net7, s = VSS, b = VSS) # Current mirror co-operating with mn3
+        ibias = h.Isrc(dc = p.ibias)(p = VDD, n = net7) # Ideal current source to be mirrored
 
         # Compensation Network
-        Cc = h.Cap(c = p.Cc)(p = net5, n = net6)
+        Cc = h.Cap(c = p.Cc)(p = net5, n = out) # Miller Capacitance
 
     return DiffOta
 
@@ -133,21 +136,37 @@ class MosDcopSim:
         """# Basic Mos Testbench"""
 
         VSS = h.Port()  # The testbench interface: sole port VSS
-        vdc = h.Vdc(dc=1.2)(n=VSS)  # A DC voltage source
+        vdc = h.Vdc(dc=1.2,ac=1)(n=VSS)  # A DC voltage source
         dcin = h.Diff()
-        sigp = h.Vdc(dc=0.6)(n=VSS)
-        sign = h.Vdc(dc=0.55)(n=VSS)
-        dcin.p=sigp.p
-        dcin.n=sign.n
-        inst=OpAmp()(VDD=vdc.p, VSS=VSS, inp=dcin)
+        sig_out = h.Signal()
+        sig_p = h.Vdc(dc=0.65)(p=dcin.p,n=VSS)
+        sig_n = h.Vdc(dc=0.55)(p=dcin.n,n=VSS)
+        
+        inst=OpAmp()(VDD=vdc.p, VSS=VSS, inp=dcin, out=sig_out)
 
     # Simulation Stimulus
     op = hs.Op()
-    mod = hs.Include("spice_models/45nm_bulk.txt")
+    # ac = hs.Ac(sweep=hs.LogSweep(1e1, 1e10, 10))
+    mod = hs.Include("../examples/45nm_bulk.txt")
 
 
 def main():
     h.netlist(OpAmp(), sys.stdout)
+
+    opts = vsp.SimOptions(
+        simulator=vsp.SupportedSimulators.NGSPICE,
+        fmt=vsp.ResultFormat.SIM_DATA,  # Get Python-native result types
+        rundir="./scratch",  # Set the working directory for the simulation. Uses a temporary directory by default.
+    )
+    if not vsp.ngspice.available():
+        print("ngspice is not available. Skipping simulation.")
+        return
+
+    # Run the simulation!
+    results = MosDcopSim.run(opts)
+
+    # Get the transistor drain current
+    print(results)
 
 
 if __name__ == "__main__":
