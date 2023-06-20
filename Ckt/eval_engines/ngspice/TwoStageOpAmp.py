@@ -136,18 +136,18 @@ class MosDcopSim:
         """# Basic Mos Testbench"""
 
         VSS = h.Port()  # The testbench interface: sole port VSS
-        vdc = h.Vdc(dc=1.2,ac=1)(n=VSS)  # A DC voltage source
+        vdc = h.Vdc(dc=1.2)(n=VSS)  # A DC voltage source
         dcin = h.Diff()
         sig_out = h.Signal()
-        sig_p = h.Vdc(dc=0.65)(p=dcin.p,n=VSS)
-        sig_n = h.Vdc(dc=0.55)(p=dcin.n,n=VSS)
+        sig_p = h.Vdc(dc=0.6, ac=0.5)(p=dcin.p,n=VSS)
+        sig_n = h.Vdc(dc=0.6, ac=-0.5)(p=dcin.n,n=VSS)
         
         inst=OpAmp()(VDD=vdc.p, VSS=VSS, inp=dcin, out=sig_out)
 
     # Simulation Stimulus
     op = hs.Op()
-    # ac = hs.Ac(sweep=hs.LogSweep(1e1, 1e10, 10))
-    mod = hs.Include("../examples/45nm_bulk.txt")
+    ac = hs.Ac(sweep=hs.LogSweep(1e1, 1e10, 10))
+    mod = hs.Include("../45nm_bulk.txt")
 
 
 def main():
@@ -166,7 +166,41 @@ def main():
     results = MosDcopSim.run(opts)
 
     # Get the transistor drain current
-    print(results)
+    # print(results)
+    print(results["op"])
+    print(results["ac"].data["v(xtop.sig_out)"])
+    print(results["ac"].data["i(v.xtop.vvdc)"])
+    # # print(results["ac"].data["v(xtop.dcin_p)"])
+    # # print(results["ac"].data["v(xtop.dcin_n)"])
+    result_list=list(results["ac"].data["v(xtop.sig_out)"])
+    result_list_i=list(results["ac"].data["i(v.xtop.vvdc)"])
+    import math, cmath
+    # from tabulate import tabulate
+    for i in range(len(result_list)):
+        freq = math.pow(10,i/10)
+        gain = result_list[i]
+        abs_gain = abs(result_list[i])*2
+        gain_phase = math.degrees(cmath.phase(gain))
+        power_con = abs(result_list_i[i])
+        print (format(freq,".7E")+"   "+format(gain,".7E")+"   "+format(abs_gain,".7E")+"   "+str(gain_phase)+"   "+format(power_con,".7E"))
+    
+    for i in range(len(result_list)-1):
+        if (abs(result_list[i])*2>1) & (abs(result_list[i+1])*2<1):
+            if abs(abs(result_list[i])*2-1) > abs(abs(result_list[i+1])*2-1):
+                ugbw = math.pow(10,(i+1)/10)
+                phase_margin = math.degrees(cmath.phase(result_list[i+1]))
+            else:
+                ugbw = math.pow(10,i/10)
+                phase_margin = math.degrees(cmath.phase(result_list[i]))
+
+    # print(result_list)
+    # print(len(result_list))
+    # print(list(results["ac"].data["v(xtop.sig_out)"]))
+    # print(len(results["ac"].data["v(xtop.sig_out)"]))
+    print("Gain: "+format(abs(result_list[0])*2,".7e"))
+    print("UGBW: "+format(ugbw,".7e"))
+    print("Phase Margin: "+str(180+phase_margin))
+    print("Ivdd: "+format(abs(result_list_i[0]),".7e"))
 
 
 if __name__ == "__main__":
