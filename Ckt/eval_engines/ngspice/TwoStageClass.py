@@ -66,7 +66,7 @@ class TwoStageClass(NgSpiceWrapper):
         else:
             return freq[0]
 
-    def find_phm(self, freq, vout):
+    def find_phm(freq:np.array, vout:np.array):
         gain = np.abs(vout)
         phase = np.angle(vout, deg=False)
         phase = np.unwrap(phase)  # unwrap the discontinuity
